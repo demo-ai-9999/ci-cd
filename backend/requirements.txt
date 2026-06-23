@@ -1,0 +1,9 @@
+fastapi>=0.115.0,<1.0.0
+uvicorn==0.20.0
+sqlalchemy==1.4.46
+psycopg2-binary==2.9.6
+# asyncpg==0.27.0
+python-dotenv==0.21.0
+pydantic>=2.9.0,<3.0.0
+google-genai>=2.0.0,<3.0.0
+# 비동기 DB 연결을 쓴다면 psycopg2 대신 asyncpg도 가능하다.
