@@ -25,8 +25,11 @@ import {
   getChatSession,
   listChatSessions,
   loadLastChatSessionId,
+  loadLocalChatMessages,
   sendChatMessage,
+  sendSearchQuery,
   storeLastChatSessionId,
+  storeLocalChatMessages,
   type ChatMessage,
   type ChatSessionDetail,
   type ChatSessionSummary,
@@ -99,16 +102,72 @@ type ChatLayoutProps = {
   onSessionExpired: () => void
 }
 
+function createSyntheticMessage(
+  role: ChatMessage['role'],
+  content: string,
+  id: number,
+  createdAt: string,
+): ChatMessage {
+  return {
+    id,
+    role,
+    content,
+    model: 'local-search',
+    created_at: createdAt,
+  }
+}
+
+function formatSearchAnswer(response: {
+  answer: string
+  results: Array<{ title: string; link: string; snippet: string }>
+}) {
+  const sources = response.results
+    .map((result, index) => {
+      const lines = [
+        `${index + 1}. ${result.title}`,
+        result.link,
+        result.snippet,
+      ].filter(Boolean)
+      return lines.join('\n')
+    })
+    .join('\n\n')
+
+  return sources ? `${response.answer}\n\n참고한 출처\n${sources}` : response.answer
+}
+
 function ChatLayout({ token, user, onLogout, onSessionExpired }: ChatLayoutProps) {
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([])
   const [selectedSessionId, setSelectedSessionId] = useState<number | null>(() => loadLastChatSessionId())
   const [sessionDetail, setSessionDetail] = useState<ChatSessionDetail | null>(null)
   const [newSessionTitle, setNewSessionTitle] = useState('')
   const [messageDraft, setMessageDraft] = useState('')
+  const [isSearchMode, setIsSearchMode] = useState(false)
+  const [localMessagesBySessionId, setLocalMessagesBySessionId] = useState<Record<number, ChatMessage[]>>(() =>
+    loadLocalChatMessages(),
+  )
   const [sessionsLoading, setSessionsLoading] = useState(true)
   const [detailLoading, setDetailLoading] = useState(false)
   const [sending, setSending] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
+
+  const mergeMessages = (baseMessages: ChatMessage[], sessionId: number) => {
+    const localMessages = localMessagesBySessionId[sessionId] ?? []
+    if (localMessages.length === 0) {
+      return baseMessages
+    }
+
+    return [...baseMessages, ...localMessages].sort((left, right) => {
+      const timeDelta = new Date(left.created_at).getTime() - new Date(right.created_at).getTime()
+      if (timeDelta !== 0) {
+        return timeDelta
+      }
+      return left.id - right.id
+    })
+  }
+
+  useEffect(() => {
+    storeLocalChatMessages(localMessagesBySessionId)
+  }, [localMessagesBySessionId])
 
   const reloadSessions = async (preferredSessionId: number | null = null) => {
     const sessionList = await listChatSessions(token)
@@ -135,7 +194,10 @@ function ChatLayout({ token, user, onLogout, onSessionExpired }: ChatLayoutProps
 
   const loadSessionDetail = async (sessionId: number) => {
     const detail = await getChatSession(token, sessionId)
-    setSessionDetail(detail)
+    setSessionDetail({
+      ...detail,
+      messages: mergeMessages(detail.messages, sessionId),
+    })
     setActionError(null)
     return detail
   }
@@ -231,7 +293,7 @@ function ChatLayout({ token, user, onLogout, onSessionExpired }: ChatLayoutProps
 
   const handleSendMessage = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (selectedSessionId === null || sending) return
+    if (sending) return
 
     const trimmedMessage = messageDraft.trim()
     if (!trimmedMessage) return
@@ -240,9 +302,69 @@ function ChatLayout({ token, user, onLogout, onSessionExpired }: ChatLayoutProps
     setActionError(null)
 
     try {
-      await sendChatMessage(token, selectedSessionId, trimmedMessage)
+      if (isSearchMode) {
+        let activeSessionId = selectedSessionId
+        if (activeSessionId === null) {
+          const created = await createChatSession(token, '정보 검색')
+          setSessions((current) => [created, ...current])
+          setSelectedSessionId(created.id)
+          storeLastChatSessionId(created.id)
+          activeSessionId = created.id
+          await loadSessionDetail(created.id)
+        }
+
+        const response = await sendSearchQuery(token, trimmedMessage)
+        const createdAt = new Date().toISOString()
+        const localMessageBaseId = -Date.now() * 2
+        const userMessage = createSyntheticMessage(
+          'user',
+          `[검색요청] ${trimmedMessage}`,
+          localMessageBaseId,
+          createdAt,
+        )
+        const assistantMessage = createSyntheticMessage(
+          'assistant',
+          formatSearchAnswer(response),
+          localMessageBaseId + 1,
+          createdAt,
+        )
+
+        setLocalMessagesBySessionId((current) => {
+          const nextMessages = current[activeSessionId] ?? []
+          const mergedMessages = [...nextMessages, userMessage, assistantMessage]
+          return {
+            ...current,
+            [activeSessionId]: mergedMessages,
+          }
+        })
+
+        setSessionDetail((current) =>
+          current && current.id === activeSessionId
+            ? {
+                ...current,
+                messages: [...current.messages, userMessage, assistantMessage],
+                updated_at: new Date().toISOString(),
+              }
+            : current,
+        )
+
+        setSessions((current) =>
+          current.map((session) =>
+            session.id === activeSessionId
+              ? {
+                  ...session,
+                  updated_at: new Date().toISOString(),
+                }
+              : session,
+          ),
+        )
+      } else {
+        if (selectedSessionId === null) return
+        await sendChatMessage(token, selectedSessionId, trimmedMessage)
+        await Promise.all([loadSessionDetail(selectedSessionId), reloadSessions(selectedSessionId)])
+      }
+
       setMessageDraft('')
-      await Promise.all([loadSessionDetail(selectedSessionId), reloadSessions(selectedSessionId)])
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
         onSessionExpired()
@@ -278,6 +400,7 @@ function ChatLayout({ token, user, onLogout, onSessionExpired }: ChatLayoutProps
   }
 
   const selectedSession = sessions.find((item) => item.id === selectedSessionId) ?? null
+  const chatLocked = !selectedSession || selectedSession.is_archived
 
   return (
     <Box
@@ -462,6 +585,25 @@ function ChatLayout({ token, user, onLogout, onSessionExpired }: ChatLayoutProps
 
                 <Box component="form" onSubmit={handleSendMessage}>
                   <Stack spacing={1.5}>
+                    <Stack direction="row" sx={{ alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
+                      <Button
+                        type="button"
+                        variant={isSearchMode ? 'contained' : 'outlined'}
+                        color={isSearchMode ? 'secondary' : 'primary'}
+                        onClick={() => {
+                          setIsSearchMode((current) => {
+                            return !current
+                          })
+                          setActionError(null)
+                        }}
+                      >
+                        [정보 검색]
+                      </Button>
+                      <Typography variant="body2" color="text.secondary">
+                        {isSearchMode ? '검색 모드로 요청합니다.' : '일반 채팅 모드로 요청합니다.'}
+                      </Typography>
+                    </Stack>
+
                     <TextField
                       label="메시지"
                       value={messageDraft}
@@ -469,22 +611,28 @@ function ChatLayout({ token, user, onLogout, onSessionExpired }: ChatLayoutProps
                       placeholder="Gemini에게 질문을 입력하세요."
                       multiline
                       minRows={5}
-                      disabled={!selectedSession || selectedSession.is_archived}
+                      disabled={chatLocked}
                       fullWidth
                     />
 
                     <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ alignItems: 'center' }}>
                       <Typography variant="body2" color="text.secondary" sx={{ flex: 1 }}>
-                        {selectedSession?.is_archived
-                          ? '보관된 대화방에는 메시지를 보낼 수 없습니다.'
-                          : '최근 대화 맥락을 함께 전송합니다.'}
+                        {isSearchMode
+                          ? '검색 모드에서는 정보 검색 백엔드 엔드포인트를 사용합니다.'
+                          : selectedSession?.is_archived
+                            ? '보관된 대화방에는 메시지를 보낼 수 없습니다.'
+                            : '최근 대화 맥락을 함께 전송합니다.'}
                       </Typography>
                       <Button
                         type="submit"
                         variant="contained"
-                        disabled={!selectedSession || selectedSession.is_archived || sending || !messageDraft.trim()}
+                        disabled={
+                          sending ||
+                          !messageDraft.trim() ||
+                          chatLocked
+                        }
                       >
-                        {sending ? '전송 중...' : '메시지 보내기'}
+                        {sending ? '전송 중...' : isSearchMode ? '검색하기' : '메시지 보내기'}
                       </Button>
                     </Stack>
                   </Stack>

@@ -1,8 +1,8 @@
 from datetime import datetime
 from typing import cast
 
+import httpx
 from fastapi import HTTPException, status
-from google import genai
 from sqlalchemy.orm import Session
 
 from config import get_settings
@@ -11,9 +11,10 @@ from models import ChatMessage, ChatSession, User
 DEFAULT_CHAT_TITLE = "기본 대화"
 DEFAULT_NEW_CHAT_TITLE = "새 대화"
 MAX_CONTEXT_MESSAGES = 12
+GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta"
 
 
-def get_gemini_client() -> genai.Client:
+def get_gemini_api_key() -> str:
     api_key = cast(str | None, get_settings()["gemini_api_key"])
     if not api_key:
         raise HTTPException(
@@ -21,7 +22,7 @@ def get_gemini_client() -> genai.Client:
             detail="GEMINI_API_KEY가 설정되어 있지 않습니다.",
         )
 
-    return genai.Client(api_key=api_key)
+    return api_key
 
 
 def get_gemini_model_name() -> str:
@@ -142,22 +143,42 @@ def build_gemini_prompt(messages: list[ChatMessage], latest_question: str) -> st
 
 def call_gemini(prompt: str) -> str:
     model = get_gemini_model_name()
-    client = get_gemini_client()
+    api_key = get_gemini_api_key()
+    url = f"{GEMINI_API_BASE}/models/{model}:generateContent"
 
     try:
-        response = client.models.generate_content(
-            model=model,
-            contents=prompt,
+        response = httpx.post(
+            url,
+            params={"key": api_key},
+            json={
+                "contents": [
+                    {
+                        "role": "user",
+                        "parts": [{"text": prompt}],
+                    }
+                ],
+            },
+            timeout=60.0,
         )
+        response.raise_for_status()
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Gemini API 호출에 실패했습니다: {exc}",
         ) from exc
-    finally:
-        client.close()
 
-    answer = response.text
+    payload = response.json()
+    candidates = payload.get("candidates", []) if isinstance(payload, dict) else []
+    answer = ""
+    if candidates:
+        content = candidates[0].get("content", {}) if isinstance(candidates[0], dict) else {}
+        parts = content.get("parts", []) if isinstance(content, dict) else []
+        answer = "".join(
+            part.get("text", "")
+            for part in parts
+            if isinstance(part, dict)
+        ).strip()
+
     if not answer:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,

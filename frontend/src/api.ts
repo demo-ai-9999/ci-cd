@@ -36,6 +36,18 @@ export type ChatReplyResponse = {
   assistant_message_id: number
 }
 
+export type SearchResult = {
+  title: string
+  link: string
+  snippet: string
+}
+
+export type SearchResponse = {
+  query: string
+  answer: string
+  results: SearchResult[]
+}
+
 export type ApiValidationError = {
   detail?: unknown
 }
@@ -56,6 +68,7 @@ const API_BASE = '/api'
 export const AUTH_TOKEN_KEY = 'myproject.auth.token'
 export const AUTH_USER_KEY = 'myproject.auth.user'
 export const LAST_CHAT_SESSION_KEY = 'myproject.chat.lastSessionId'
+export const LOCAL_CHAT_MESSAGES_KEY = 'myproject.chat.localMessages'
 
 function readErrorMessage(payload: unknown, fallback: string) {
   if (typeof payload === 'string' && payload.trim()) {
@@ -148,6 +161,7 @@ export function clearAuthStorage() {
   window.localStorage.removeItem(AUTH_TOKEN_KEY)
   window.localStorage.removeItem(AUTH_USER_KEY)
   window.localStorage.removeItem(LAST_CHAT_SESSION_KEY)
+  window.localStorage.removeItem(LOCAL_CHAT_MESSAGES_KEY)
 }
 
 export function loadStoredUser() {
@@ -180,6 +194,24 @@ export function storeLastChatSessionId(sessionId: number | null) {
   }
 
   window.localStorage.setItem(LAST_CHAT_SESSION_KEY, String(sessionId))
+}
+
+export function loadLocalChatMessages() {
+  const raw = window.localStorage.getItem(LOCAL_CHAT_MESSAGES_KEY)
+  if (!raw) {
+    return {}
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as Record<string, ChatMessage[]>
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+export function storeLocalChatMessages(messagesBySessionId: Record<number, ChatMessage[]>) {
+  window.localStorage.setItem(LOCAL_CHAT_MESSAGES_KEY, JSON.stringify(messagesBySessionId))
 }
 
 export async function login(username: string, password: string) {
@@ -255,6 +287,14 @@ export async function sendChatMessage(
       method: 'POST',
       body: JSON.stringify({ content }),
     },
+    token,
+  )
+}
+
+export async function sendSearchQuery(token: string, query: string) {
+  return requestJson<SearchResponse>(
+    `/search?query=${encodeURIComponent(query)}`,
+    { method: 'GET' },
     token,
   )
 }
