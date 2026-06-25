@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import type { FormEvent } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import type { ChangeEvent, FormEvent, ReactNode } from 'react'
 import {
   Alert,
   Avatar,
@@ -13,6 +13,7 @@ import {
   List,
   ListItemButton,
   ListItemText,
+  LinearProgress,
   Paper,
   Stack,
   TextField,
@@ -28,6 +29,7 @@ import {
   loadLocalChatMessages,
   sendChatMessage,
   sendSearchQuery,
+  uploadDocumentSummary,
   storeLastChatSessionId,
   storeLocalChatMessages,
   type ChatMessage,
@@ -44,6 +46,192 @@ const dateFormatter = new Intl.DateTimeFormat('ko-KR', {
 function formatDate(value: string) {
   const parsed = new Date(value)
   return Number.isNaN(parsed.getTime()) ? value : dateFormatter.format(parsed)
+}
+
+function renderInlineMarkdown(text: string): ReactNode[] {
+  const nodes: ReactNode[] = []
+  const pattern =
+    /(\[([^\]]+)\]\((https?:\/\/[^\s)]+)\))|(`[^`]+`)|(\*\*([^*]+)\*\*)|(\*([^*]+)\*)|(__([^_]+)__)|(_([^_]+)_)/g
+  let lastIndex = 0
+  let match: RegExpExecArray | null
+
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      nodes.push(text.slice(lastIndex, match.index))
+    }
+
+    if (match[2] && match[3]) {
+      nodes.push(
+        <a key={`${match.index}-link`} href={match[3]} target="_blank" rel="noreferrer">
+          {match[2]}
+        </a>,
+      )
+    } else if (match[4]) {
+      nodes.push(
+        <code key={`${match.index}-code`} style={{ padding: '0 0.25rem', background: 'rgba(15, 23, 42, 0.08)', borderRadius: 4 }}>
+          {match[4].slice(1, -1)}
+        </code>,
+      )
+    } else if (match[6]) {
+      nodes.push(<strong key={`${match.index}-bold`}>{match[6]}</strong>)
+    } else if (match[8]) {
+      nodes.push(<em key={`${match.index}-italic1`}>{match[8]}</em>)
+    } else if (match[10]) {
+      nodes.push(<strong key={`${match.index}-bold2`}>{match[10]}</strong>)
+    } else if (match[12]) {
+      nodes.push(<em key={`${match.index}-italic2`}>{match[12]}</em>)
+    }
+
+    lastIndex = pattern.lastIndex
+  }
+
+  if (lastIndex < text.length) {
+    nodes.push(text.slice(lastIndex))
+  }
+
+  return nodes
+}
+
+function MarkdownContent({ content }: { content: string }) {
+  const lines = content.replace(/\r\n/g, '\n').split('\n')
+  const blocks: ReactNode[] = []
+  let index = 0
+
+  while (index < lines.length) {
+    const line = lines[index]
+
+    if (!line.trim()) {
+      index += 1
+      continue
+    }
+
+    if (line.startsWith('```')) {
+      const language = line.slice(3).trim()
+      const codeLines: string[] = []
+      index += 1
+      while (index < lines.length && !lines[index].startsWith('```')) {
+        codeLines.push(lines[index])
+        index += 1
+      }
+      if (index < lines.length) {
+        index += 1
+      }
+
+      blocks.push(
+        <Box
+          key={`${index}-codeblock`}
+          component="pre"
+          sx={{
+            m: 0,
+            p: 1.5,
+            borderRadius: 2,
+            overflowX: 'auto',
+            bgcolor: 'rgba(15, 23, 42, 0.06)',
+            border: '1px solid',
+            borderColor: 'divider',
+            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+            whiteSpace: 'pre-wrap',
+          }}
+        >
+          {language ? <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>{language}</Typography> : null}
+          <code>{codeLines.join('\n')}</code>
+        </Box>,
+      )
+      continue
+    }
+
+    const headingMatch = line.match(/^(#{1,6})\s+(.*)$/)
+    if (headingMatch) {
+      const level = headingMatch[1].length
+      const headingVariant = (
+        level === 1
+          ? 'h3'
+          : level === 2
+            ? 'h4'
+            : level === 3
+              ? 'h5'
+              : 'h6'
+      ) as 'h3' | 'h4' | 'h5' | 'h6'
+      blocks.push(
+        <Typography key={`${index}-heading`} variant={headingVariant} sx={{ fontWeight: 800, mt: 0.5 }}>
+          {renderInlineMarkdown(headingMatch[2])}
+        </Typography>,
+      )
+      index += 1
+      continue
+    }
+
+    if (/^>\s?/.test(line)) {
+      const quoteLines: string[] = []
+      while (index < lines.length && /^>\s?/.test(lines[index])) {
+        quoteLines.push(lines[index].replace(/^>\s?/, ''))
+        index += 1
+      }
+      blocks.push(
+        <Box
+          key={`${index}-quote`}
+          sx={{
+            borderLeft: '4px solid',
+            borderColor: 'primary.main',
+            pl: 2,
+            py: 1,
+            bgcolor: 'rgba(14, 165, 233, 0.05)',
+            borderRadius: 1,
+          }}
+        >
+          <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
+            {renderInlineMarkdown(quoteLines.join('\n'))}
+          </Typography>
+        </Box>,
+      )
+      continue
+    }
+
+    const listMatch = line.match(/^(\s*)([-*+]|\d+\.)\s+(.*)$/)
+    if (listMatch) {
+      const ordered = /\d+\./.test(listMatch[2])
+      const items: string[] = []
+      while (index < lines.length) {
+        const current = lines[index]
+        const currentMatch = current.match(/^(\s*)([-*+]|\d+\.)\s+(.*)$/)
+        if (!currentMatch) break
+        items.push(currentMatch[3])
+        index += 1
+      }
+
+      blocks.push(
+        <Box key={`${index}-list`} component={ordered ? 'ol' : 'ul'} sx={{ pl: 3, my: 0 }}>
+          {items.map((item, itemIndex) => (
+            <li key={`${index}-item-${itemIndex}`}>
+              <Typography variant="body2" component="span">
+                {renderInlineMarkdown(item)}
+              </Typography>
+            </li>
+          ))}
+        </Box>,
+      )
+      continue
+    }
+
+    const paragraphLines: string[] = [line]
+    index += 1
+    while (index < lines.length && lines[index].trim() && !lines[index].startsWith('```')) {
+      const nextLine = lines[index]
+      if (/^(#{1,6})\s+/.test(nextLine) || /^>\s?/.test(nextLine) || /^(\s*)([-*+]|\d+\.)\s+/.test(nextLine)) {
+        break
+      }
+      paragraphLines.push(nextLine)
+      index += 1
+    }
+
+    blocks.push(
+      <Typography key={`${index}-paragraph`} variant="body2" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+        {renderInlineMarkdown(paragraphLines.join('\n'))}
+      </Typography>,
+    )
+  }
+
+  return <Stack spacing={1}>{blocks}</Stack>
 }
 
 function roleMeta(role: ChatMessage['role']) {
@@ -87,12 +275,46 @@ function MessageBubble({ message }: { message: ChatMessage }) {
             {formatDate(message.created_at)}
           </Typography>
         </Stack>
-        <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-          {message.content}
-        </Typography>
+        <MarkdownContent content={message.content} />
       </Stack>
     </Paper>
   )
+}
+
+function isDocumentUploadUserMessage(message: ChatMessage) {
+  return message.role === 'user' && message.content.startsWith('[파일 업로드] ')
+}
+
+function isDocumentUploadSystemMessage(message: ChatMessage) {
+  return message.role === 'system' && message.content.startsWith('[문서 내용 ')
+}
+
+function getDisplayMessages(messages: ChatMessage[]) {
+  return messages.reduce<ChatMessage[]>((visibleMessages, message, index) => {
+    if (isDocumentUploadSystemMessage(message)) {
+      return visibleMessages
+    }
+
+    let displayMessage = message
+
+    if (isDocumentUploadUserMessage(message)) {
+      displayMessage = {
+        ...message,
+        content: message.content.replace('[파일 업로드] ', '[파일요약] '),
+      }
+    } else if (message.role === 'assistant') {
+      const previousRelevantMessage = [...messages.slice(0, index)].reverse().find((item) => item.role !== 'system')
+      if (previousRelevantMessage && isDocumentUploadUserMessage(previousRelevantMessage)) {
+        displayMessage = {
+          ...message,
+          content: `[파일요약] ${message.content}`,
+        }
+      }
+    }
+
+    visibleMessages.push(displayMessage)
+    return visibleMessages
+  }, [])
 }
 
 type ChatLayoutProps = {
@@ -142,13 +364,16 @@ function ChatLayout({ token, user, onLogout, onSessionExpired }: ChatLayoutProps
   const [newSessionTitle, setNewSessionTitle] = useState('')
   const [messageDraft, setMessageDraft] = useState('')
   const [isSearchMode, setIsSearchMode] = useState(false)
+  const [selectedDocumentFile, setSelectedDocumentFile] = useState<File | null>(null)
   const [localMessagesBySessionId, setLocalMessagesBySessionId] = useState<Record<number, ChatMessage[]>>(() =>
     loadLocalChatMessages(),
   )
   const [sessionsLoading, setSessionsLoading] = useState(true)
   const [detailLoading, setDetailLoading] = useState(false)
   const [sending, setSending] = useState(false)
+  const [uploading, setUploading] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   const mergeMessages = (baseMessages: ChatMessage[], sessionId: number) => {
     const localMessages = localMessagesBySessionId[sessionId] ?? []
@@ -168,6 +393,8 @@ function ChatLayout({ token, user, onLogout, onSessionExpired }: ChatLayoutProps
   useEffect(() => {
     storeLocalChatMessages(localMessagesBySessionId)
   }, [localMessagesBySessionId])
+
+  const isProcessing = sessionsLoading || detailLoading || sending || uploading
 
   const reloadSessions = async (preferredSessionId: number | null = null) => {
     const sessionList = await listChatSessions(token)
@@ -291,9 +518,15 @@ function ChatLayout({ token, user, onLogout, onSessionExpired }: ChatLayoutProps
     storeLastChatSessionId(sessionId)
   }
 
+  const handleDocumentFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0] ?? null
+    setSelectedDocumentFile(file)
+    setActionError(null)
+  }
+
   const handleSendMessage = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (sending) return
+    if (isProcessing) return
 
     const trimmedMessage = messageDraft.trim()
     if (!trimmedMessage) return
@@ -376,10 +609,58 @@ function ChatLayout({ token, user, onLogout, onSessionExpired }: ChatLayoutProps
     }
   }
 
+  const handleDocumentSummary = async () => {
+    if (isProcessing) return
+
+    if (!selectedDocumentFile) {
+      setActionError('요약할 문서를 먼저 선택해 주세요.')
+      return
+    }
+
+    if (selectedSessionId !== null && chatLocked) {
+      setActionError('보관된 대화방에는 파일을 업로드할 수 없습니다.')
+      return
+    }
+
+    setUploading(true)
+    setActionError(null)
+
+    try {
+      let activeSessionId = selectedSessionId
+      if (activeSessionId === null) {
+        const inferredTitle = selectedDocumentFile.name.replace(/\.[^.]+$/, '').trim() || '문서 요약'
+        const created = await createChatSession(token, inferredTitle)
+        setSessions((current) => [created, ...current])
+        setSelectedSessionId(created.id)
+        storeLastChatSessionId(created.id)
+        activeSessionId = created.id
+        await loadSessionDetail(created.id)
+      }
+
+      const response = await uploadDocumentSummary(token, selectedDocumentFile, activeSessionId)
+      const nextSessionId = response.session_id
+      setSelectedSessionId(nextSessionId)
+      storeLastChatSessionId(nextSessionId)
+      await Promise.all([loadSessionDetail(nextSessionId), reloadSessions(nextSessionId)])
+      setSelectedDocumentFile(null)
+      if (fileInputRef.current) {
+        fileInputRef.current.value = ''
+      }
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        onSessionExpired()
+        return
+      }
+      setActionError(error instanceof Error ? error.message : '파일 요약을 처리하지 못했습니다.')
+    } finally {
+      setUploading(false)
+    }
+  }
+
   const handleArchiveSession = async () => {
     if (selectedSessionId === null) return
 
-    const confirmed = window.confirm('이 대화방을 보관하시겠습니까?')
+    const confirmed = window.confirm('이 대화방을 삭제하시겠습니까?')
     if (!confirmed) return
 
     try {
@@ -395,12 +676,14 @@ function ChatLayout({ token, user, onLogout, onSessionExpired }: ChatLayoutProps
         onSessionExpired()
         return
       }
-      setActionError(error instanceof Error ? error.message : '대화방을 보관하지 못했습니다.')
+      setActionError(error instanceof Error ? error.message : '대화방을 삭제하지 못했습니다.')
     }
   }
 
   const selectedSession = sessions.find((item) => item.id === selectedSessionId) ?? null
   const chatLocked = !selectedSession || selectedSession.is_archived
+  const uploadLocked = selectedSession?.is_archived ?? false
+  const displayMessages = getDisplayMessages(sessionDetail?.messages ?? [])
 
   return (
     <Box
@@ -532,11 +815,20 @@ function ChatLayout({ token, user, onLogout, onSessionExpired }: ChatLayoutProps
                     onClick={handleArchiveSession}
                     disabled={!selectedSession || selectedSession.is_archived}
                   >
-                    보관
+                    삭제
                   </Button>
                 </Stack>
 
                 {actionError ? <Alert severity="error">{actionError}</Alert> : null}
+
+                {isProcessing ? (
+                  <Stack spacing={1} sx={{ py: 0.5 }}>
+                    <LinearProgress />
+                    <Typography variant="caption" color="text.secondary">
+                      처리 중
+                    </Typography>
+                  </Stack>
+                ) : null}
 
                 <Paper
                   variant="outlined"
@@ -556,8 +848,8 @@ function ChatLayout({ token, user, onLogout, onSessionExpired }: ChatLayoutProps
                           메시지를 불러오는 중입니다.
                         </Typography>
                       </Stack>
-                    ) : sessionDetail?.messages.length ? (
-                      sessionDetail.messages.map((message) => (
+                    ) : displayMessages.length ? (
+                      displayMessages.map((message) => (
                         <MessageBubble key={message.id} message={message} />
                       ))
                     ) : (
@@ -611,7 +903,7 @@ function ChatLayout({ token, user, onLogout, onSessionExpired }: ChatLayoutProps
                       placeholder="Gemini에게 질문을 입력하세요."
                       multiline
                       minRows={5}
-                      disabled={chatLocked}
+                      disabled={chatLocked || isProcessing}
                       fullWidth
                     />
 
@@ -626,14 +918,47 @@ function ChatLayout({ token, user, onLogout, onSessionExpired }: ChatLayoutProps
                       <Button
                         type="submit"
                         variant="contained"
-                        disabled={
-                          sending ||
-                          !messageDraft.trim() ||
-                          chatLocked
-                        }
+                        disabled={isProcessing || !messageDraft.trim() || chatLocked}
                       >
-                        {sending ? '전송 중...' : isSearchMode ? '검색하기' : '메시지 보내기'}
+                        {isProcessing ? '처리 중...' : isSearchMode ? '검색하기' : '메시지 보내기'}
                       </Button>
+                    </Stack>
+
+                    <Divider />
+
+                    <Stack spacing={1.5}>
+                      <Stack direction="row" sx={{ alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
+                        <input
+                          ref={fileInputRef}
+                          type="file"
+                          hidden
+                          accept=".pdf,.txt,application/pdf,text/plain"
+                          onChange={handleDocumentFileChange}
+                        />
+                        <Button
+                          type="button"
+                          variant="outlined"
+                          onClick={() => {
+                            fileInputRef.current?.click()
+                          }}
+                          disabled={isProcessing || uploadLocked}
+                        >
+                          [업로드]
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="contained"
+                          onClick={handleDocumentSummary}
+                          disabled={isProcessing || !selectedDocumentFile || uploadLocked}
+                        >
+                          {uploading ? '요약 중...' : '[문서 파일 요약]'}
+                        </Button>
+                        <Typography variant="body2" color="text.secondary" sx={{ flex: 1 }}>
+                          {selectedDocumentFile
+                            ? `선택된 파일: ${selectedDocumentFile.name}`
+                            : 'PDF 또는 텍스트 파일을 선택해 요약할 수 있습니다.'}
+                        </Typography>
+                      </Stack>
                     </Stack>
                   </Stack>
                 </Box>

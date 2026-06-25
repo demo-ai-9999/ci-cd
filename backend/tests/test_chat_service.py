@@ -8,6 +8,7 @@ from services.chat_service import (
     archive_chat_session,
     create_chat_session,
     create_chat_turn,
+    delete_chat_session,
     get_or_create_default_chat_session,
     get_owned_chat_session,
     list_chat_messages,
@@ -103,6 +104,27 @@ def test_archived_chat_session_rejects_messages(db_session, monkeypatch):
         raised = exc.status_code == 409
 
     assert raised
+
+
+def test_delete_chat_session_removes_session_and_messages(db_session, monkeypatch):
+    user = _create_user(db_session, "kate")
+    session = create_chat_session(db_session, user, "삭제 대상")
+
+    monkeypatch.setattr(chat_service, "call_gemini", lambda prompt: "삭제 확인 답변")
+
+    create_chat_turn(
+        db_session,
+        session,
+        "테스트 질문",
+    )
+
+    delete_chat_session(db_session, session)
+
+    sessions = list_chat_sessions(db_session, user.id)
+    messages = list_chat_messages(db_session, session.id)
+
+    assert all(item.id != session.id for item in sessions)
+    assert messages == []
 
 
 def test_gemini_failure_is_reported_as_502(db_session, monkeypatch):

@@ -12,6 +12,7 @@ from schemas import SearchResult
 from services.chat_service import get_gemini_model_name
 
 MAX_SEARCH_RESULTS = 5
+ANSWER_ONLY_INSTRUCTION = "설명이나 해설은 하지 말고, 바로 대답만 하세요."
 
 
 def _get_grounding_client() -> genai.Client:
@@ -116,7 +117,7 @@ def _call_gemini_with_grounding(query: str) -> Any:
     try:
         return client.models.generate_content(
             model=get_gemini_model_name(),
-            contents=query,
+            contents=f"{ANSWER_ONLY_INSTRUCTION}\n\n{query}",
             config=_build_grounding_config(),
         )
     except Exception as exc:  # noqa: BLE001

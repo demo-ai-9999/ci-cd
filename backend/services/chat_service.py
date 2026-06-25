@@ -12,6 +12,7 @@ DEFAULT_CHAT_TITLE = "기본 대화"
 DEFAULT_NEW_CHAT_TITLE = "새 대화"
 MAX_CONTEXT_MESSAGES = 12
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta"
+ANSWER_ONLY_INSTRUCTION = "설명이나 해설은 하지 말고, 바로 대답만 하세요."
 
 
 def get_gemini_api_key() -> str:
@@ -123,6 +124,7 @@ def list_recent_messages(db: Session, session_id: int) -> list[ChatMessage]:
 def build_gemini_prompt(messages: list[ChatMessage], latest_question: str) -> str:
     lines = [
         "당신은 사용자의 대화 맥락을 기억하는 친절한 챗봇입니다.",
+        ANSWER_ONLY_INSTRUCTION,
         "이전 대화와 현재 질문을 함께 참고해 답변하세요.",
         "",
         "대화 기록:",
@@ -230,3 +232,9 @@ def archive_chat_session(db: Session, chat_session: ChatSession) -> ChatSession:
     db.commit()
     db.refresh(chat_session)
     return chat_session
+
+
+def delete_chat_session(db: Session, chat_session: ChatSession) -> None:
+    db.query(ChatMessage).filter(ChatMessage.chat_session_id == chat_session.id).delete()
+    db.delete(chat_session)
+    db.commit()

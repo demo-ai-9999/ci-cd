@@ -10,4 +10,6 @@ passlib[bcrypt]>=1.7.4,<2.0.0
 pytest>=8.0.0,<9.0.0
 httpx>=0.27.0,<1.0.0
 alembic>=1.13.0,<2.0.0
+pdfplumber>=0.11.0,<1.0.0
+python-multipart>=0.0.9,<1.0.0
 # 비동기 DB 연결을 쓴다면 psycopg2 대신 asyncpg도 가능하다.

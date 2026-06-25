@@ -148,6 +148,41 @@ export async function requestJson<T>(
   return parseResponse<T>(response)
 }
 
+export async function requestFormData<T>(
+  path: string,
+  formData: FormData,
+  token: string | null = null,
+): Promise<T> {
+  const headers = new Headers()
+
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`)
+  }
+
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: 'POST',
+    body: formData,
+    headers,
+  })
+
+  if (!response.ok) {
+    let payload: unknown = null
+    try {
+      payload = await parseResponse<unknown>(response)
+    } catch {
+      payload = null
+    }
+
+    throw new ApiError(
+      response.status,
+      readErrorMessage(payload, `HTTP ${response.status}`),
+      payload,
+    )
+  }
+
+  return parseResponse<T>(response)
+}
+
 export function loadStoredToken() {
   return window.localStorage.getItem(AUTH_TOKEN_KEY)
 }
@@ -297,4 +332,18 @@ export async function sendSearchQuery(token: string, query: string) {
     { method: 'GET' },
     token,
   )
+}
+
+export async function uploadDocumentSummary(
+  token: string,
+  file: File,
+  sessionId: number | null = null,
+) {
+  const formData = new FormData()
+  formData.append('file', file)
+  if (sessionId !== null) {
+    formData.append('session_id', String(sessionId))
+  }
+
+  return requestFormData<ChatReplyResponse>('/chat/documents', formData, token)
 }
