@@ -1,0 +1,61 @@
+services:
+  db:
+    image: postgres:15
+    container_name: gen-ai-agent-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-myuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      POSTGRES_DB: ${POSTGRES_DB:-mydb}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-myuser} -d ${POSTGRES_DB:-mydb}",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  backend:
+    image: ghcr.io/${GHCR_OWNER:-demo-ai-9999}/gen-ai-agent-backend:${IMAGE_TAG:-1.0.0}
+    pull_policy: always
+    container_name: gen-ai-agent-backend
+    restart: unless-stopped
+    init: true
+    env_file:
+      - ./.env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-myuser}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@db:5432/${POSTGRES_DB:-mydb}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://35.208.248.232,https://35.208.248.232}
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      # 외부에서는 프런트엔드의 /api 프록시를 통해서만 접근한다.
+      - "127.0.0.1:8000:8000"
+    command: >
+      sh -c "alembic upgrade head &&
+      uvicorn main:app --host 0.0.0.0 --port 8000"
+
+  frontend:
+    image: ghcr.io/${GHCR_OWNER:-demo-ai-9999}/gen-ai-agent-frontend:${IMAGE_TAG:-1.0.0}
+    pull_policy: always
+    container_name: gen-ai-agent-frontend
+    restart: unless-stopped
+    init: true
+    depends_on:
+      - backend
+    ports:
+      # GCE 방화벽에서 TCP 80 포트를 허용해야 한다.
+      - "0.0.0.0:${FRONTEND_PORT:-80}:5173"
+    environment:
+      # Docker 네트워크 내부 주소이므로 GCE 외부 IP로 변경하지 않는다.
+      VITE_API_PROXY_TARGET: http://backend:8000
+    command: npm run dev -- --host 0.0.0.0
+
+volumes:
+  db-data:
