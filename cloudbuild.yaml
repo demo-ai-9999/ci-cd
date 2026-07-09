@@ -14,7 +14,7 @@ steps:
       - |
         cd backend
         pip install --no-cache-dir -r requirements.txt
-        pytest -q
+        PYTHONPATH=. pytest -q
 
   # 2. Docker 이미지 빌드
   - name: gcr.io/cloud-builders/docker
