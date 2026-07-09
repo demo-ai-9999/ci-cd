@@ -1,6 +1,6 @@
 substitutions:
   _REGION: asia-northeast3
-  _ARTIFACT_REPOSITORY: ci-cd
+  _ARTIFACT_REPOSITORY: gen-ai-demo
   _IMAGE_NAME: ci-cd-backend
   _SERVICE_NAME: ci-cd-backend
   _RUNTIME_SERVICE_ACCOUNT: cloud-run-runtime@test-sideno.iam.gserviceaccount.com
