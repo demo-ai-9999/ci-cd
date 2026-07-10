@@ -10,4 +10,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080}"]
+# 저장소에 남아 있는 구형 개발 DB를 이미지에 포함하지 않는다.
+# 컨테이너 시작 시 Alembic이 현재 모델에 맞는 SQLite 스키마를 생성한다.
+RUN rm -f app.db
+
+CMD ["sh", "-c", "alembic upgrade head && exec uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080}"]
