@@ -50,7 +50,8 @@ steps:
       - --timeout=300
       - --min-instances=0
       - --max-instances=3
-      - --set-env-vars=ENV=dev,GCP_PROJECT_ID=$PROJECT_ID,CORS_ORIGINS=https://gen-ai-deploy-demo.web.app      
+      - --set-env-vars=ENV=prod,GCP_PROJECT_ID=$PROJECT_ID,CORS_ORIGINS=https://gen-ai-deploy-demo.web.app
+      - --set-secrets=GEMINI_API_KEY=projects/85367638612/secrets/GEMINI_API_KEY:latest
 
 images:
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_ARTIFACT_REPOSITORY}/${_IMAGE_NAME}:$SHORT_SHA

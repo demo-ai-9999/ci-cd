@@ -64,7 +64,9 @@ export class ApiError extends Error {
   }
 }
 
-const API_BASE = '/api'
+const API_BASE =
+  import.meta.env.VITE_API_BASE_URL ??
+  'https://ci-cd-backend-85367638612.asia-northeast3.run.app'
 export const AUTH_TOKEN_KEY = 'myproject.auth.token'
 export const AUTH_USER_KEY = 'myproject.auth.user'
 export const LAST_CHAT_SESSION_KEY = 'myproject.chat.lastSessionId'
